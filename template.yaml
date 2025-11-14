@@ -1,184 +1,266 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: >-
-  AWS CloudFormation template to create a VPC with public and private subnets,
-  an Internet Gateway, and a NAT Gateway, using dynamic Availability Zones.
+Description: >
+  A CloudFormation template to create a standard VPC.
+  This VPC includes two public subnets (with IGW) and two private subnets.
+  It uses a SINGLE NAT Gateway (in Public Subnet A) for outbound internet access for BOTH private subnets.
+  IT ALSO creates a "Hello World" Lambda function (with New Relic) in the private subnets.
 
 Resources:
-  # VPC
-  CustomTestVPC:
+  # 1. Create the Virtual Private Cloud (VPC)
+  MyVPC:
     Type: AWS::EC2::VPC
     Properties:
-      CidrBlock: 18.0.0.0/20
+      CidrBlock: 10.0.0.0/16
       EnableDnsSupport: true
       EnableDnsHostnames: true
       Tags:
         - Key: Name
-          Value: custom-test-vpc
+          Value: my-vpc
 
-  # Subnets
-  PublicSubnetOne:
-    Type: AWS::EC2::Subnet
-    Properties:
-      VpcId: !Ref CustomTestVPC
-      CidrBlock: 18.0.0.0/23
-      AvailabilityZone: !Select [0, !GetAZs ''] # Dynamically selects the first AZ in the region
-      MapPublicIpOnLaunch: true
-      Tags:
-        - Key: Name
-          Value: public-subnet-one
-
-  PrivateSubnetOne:
-    Type: AWS::EC2::Subnet
-    Properties:
-      VpcId: !Ref CustomTestVPC
-      CidrBlock: 18.0.2.0/23
-      AvailabilityZone: !Select [0, !GetAZs ''] # Same AZ as PublicSubnetOne
-      MapPublicIpOnLaunch: false
-      Tags:
-        - Key: Name
-          Value: private-subnet-one
-
-  PublicSubnetTwo:
-    Type: AWS::EC2::Subnet
-    Properties:
-      VpcId: !Ref CustomTestVPC
-      CidrBlock: 18.0.4.0/23
-      AvailabilityZone: !Select [1, !GetAZs ''] # Dynamically selects the second AZ in the region
-      MapPublicIpOnLaunch: true
-      Tags:
-        - Key: Name
-          Value: public-subnet-two
-
-  PrivateSubnetTwo:
-    Type: AWS::EC2::Subnet
-    Properties:
-      VpcId: !Ref CustomTestVPC
-      CidrBlock: 18.0.6.0/23
-      AvailabilityZone: !Select [1, !GetAZs ''] # Same AZ as PublicSubnetTwo
-      MapPublicIpOnLaunch: false
-      Tags:
-        - Key: Name
-          Value: private-subnet-two
-
-  # Internet Gateway
-  InternetGateway:
+  # 2. Create the Internet Gateway (The building's front door)
+  MyInternetGateway:
     Type: AWS::EC2::InternetGateway
     Properties:
       Tags:
         - Key: Name
-          Value: custom-igw
+          Value: my-igw
 
-  AttachGateway:
+  # 3. Attach the Internet Gateway to the VPC
+  VPCGatewayAttachment:
     Type: AWS::EC2::VPCGatewayAttachment
     Properties:
-      VpcId: !Ref CustomTestVPC
-      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref MyVPC
+      InternetGatewayId: !Ref MyInternetGateway
 
-  # Public Route Table
+  # --- SUBNETS (TWO FOR EACH TYPE) ---
+
+  # 4. Create Public Subnet in AZ 'A'
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [ 0, !GetAZs '' ] # First AZ in the region
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: public-subnet-a
+
+  # 5. Create Public Subnet in AZ 'B'
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [ 1, !GetAZs '' ] # Second AZ in the region
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: public-subnet-b
+
+  # 6. Create Private Subnet in AZ 'A'
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.10.0/24
+      AvailabilityZone: !Select [ 0, !GetAZs '' ] # First AZ
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: private-subnet-a
+
+  # 7. Create Private Subnet in AZ 'B'
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.11.0/24
+      AvailabilityZone: !Select [ 1, !GetAZs '' ] # Second AZ
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: private-subnet-b
+
+  # --- NAT GATEWAY (SINGLE) ---
+
+  # 8. Elastic IP for the one NAT Gateway
+  EIPForNAT:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+    DependsOn: VPCGatewayAttachment
+
+  # 9. The single NAT Gateway (placed in Public Subnet A)
+  MyNATGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt EIPForNAT.AllocationId
+      SubnetId: !Ref PublicSubnetA # Must be in a public subnet
+      Tags:
+        - Key: Name
+          Value: my-nat-gw
+    DependsOn: EIPForNAT
+
+  # --- PUBLIC ROUTING (ONE TABLE FOR ALL PUBLIC SUBNETS) ---
+
+  # 10. Create the Public Route Table
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
-      VpcId: !Ref CustomTestVPC
+      VpcId: !Ref MyVPC
       Tags:
         - Key: Name
-          Value: public-route-table
+          Value: public-rt
 
-  PublicDefaultRoute:
+  # 11. Public Route (sends internet traffic to the IGW)
+  PublicRoute:
     Type: AWS::EC2::Route
-    DependsOn: AttachGateway # Ensure IGW is attached before creating route
     Properties:
       RouteTableId: !Ref PublicRouteTable
       DestinationCidrBlock: 0.0.0.0/0
-      GatewayId: !Ref InternetGateway
+      GatewayId: !Ref MyInternetGateway
+    DependsOn: VPCGatewayAttachment
 
-  # Public Subnet Associations
-  PublicSubnetOneRouteTableAssociation:
+  # 12. Associate Public Subnet A with Public RT
+  PublicSubnetRouteTableAssociationA:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
-      SubnetId: !Ref PublicSubnetOne
+      SubnetId: !Ref PublicSubnetA
       RouteTableId: !Ref PublicRouteTable
 
-  PublicSubnetTwoRouteTableAssociation:
+  # 13. Associate Public Subnet B with Public RT
+  PublicSubnetRouteTableAssociationB:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
-      SubnetId: !Ref PublicSubnetTwo
+      SubnetId: !Ref PublicSubnetB
       RouteTableId: !Ref PublicRouteTable
 
-  # EIP for NAT Gateway
-  NatGatewayEIP:
-    Type: AWS::EC2::EIP
-    Properties:
-      Domain: vpc # EIP for use with a NAT Gateway in a VPC
-      Tags:
-        - Key: Name
-          Value: nat-gateway-eip
+  # --- PRIVATE ROUTING (ONE TABLE FOR ALL PRIVATE SUBNETS) ---
 
-  # NAT Gateway
-  NatGateway:
-    Type: AWS::EC2::NatGateway
-    Properties:
-      AllocationId: !GetAtt NatGatewayEIP.AllocationId
-      SubnetId: !Ref PublicSubnetOne # NAT Gateway should be in a public subnet (first AZ)
-      Tags:
-        - Key: Name
-          Value: custom-nat-gw
-    DependsOn: # Ensure IGW is attached and public route exists before creating NAT GW
-      - AttachGateway
-      - PublicDefaultRoute
-
-
-  # Private Route Table
+  # 14. Create the one Private Route Table
   PrivateRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
-      VpcId: !Ref CustomTestVPC
+      VpcId: !Ref MyVPC
       Tags:
         - Key: Name
-          Value: private-route-table
+          Value: private-rt # (for all private subnets)
 
-  PrivateDefaultRoute:
+  # 15. Private Route (sends internet traffic to the single NAT Gateway)
+  PrivateRoute:
     Type: AWS::EC2::Route
     Properties:
       RouteTableId: !Ref PrivateRouteTable
       DestinationCidrBlock: 0.0.0.0/0
-      NatGatewayId: !Ref NatGateway
+      NatGatewayId: !Ref MyNATGateway
 
-  # Private Subnet Associations
-  PrivateSubnetOneRouteTableAssociation:
+  # 16. Associate Private Subnet A with the Private RT
+  PrivateSubnetRouteTableAssociationA:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
-      SubnetId: !Ref PrivateSubnetOne
+      SubnetId: !Ref PrivateSubnetA
       RouteTableId: !Ref PrivateRouteTable
 
-  PrivateSubnetTwoRouteTableAssociation:
+  # 17. Associate Private Subnet B with the Private RT
+  PrivateSubnetRouteTableAssociationB:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
-      SubnetId: !Ref PrivateSubnetTwo
-      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnetB
+      RouteTableId: !Ref PrivateRouteTable # <-- Both point to the same table
+
+  # --- LAMBDA RESOURCES ---
+
+  # 18. Security Group for the Lambda Function
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security group for the test Lambda function"
+      VpcId: !Ref MyVPC
+      SecurityGroupEgress: # Allow all outbound traffic for NAT Gateway
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: my-lambda-sg
+
+  # 19. IAM Role for the Lambda Function
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [lambda.amazonaws.com]
+            Action: [sts:AssumeRole]
+      ManagedPolicyArns:
+        # Basic role for CloudWatch Logs
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        # Role for placing the Lambda function in a VPC
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Tags:
+        - Key: Name
+          Value: my-lambda-role
+
+  # 20. The Hello World Lambda Function (with New Relic)
+  MyLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: my-test-lambda
+      Handler: newrelic_lambda_wrapper.handler
+      Runtime: python3.13
+      CodeUri: hello_world/ # This is a local folder
+      Description: A simple hello world function in a private subnet with New Relic.
+      Timeout: 10
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Layers:
+        - arn:aws:lambda:us-west-1:451483290750:layer:NewRelicPython313:28
+      Environment:
+        Variables:
+          NEW_RELIC_ACCOUNT_ID: "<Nr-Account-id>"
+          NEW_RELIC_EXTENSION_LOG_LEVEL: "DEBUG"
+          NEW_RELIC_EXTENSION_SEND_EXTENSION_LOGS: "true"
+          NEW_RELIC_EXTENSION_SEND_FUNCTION_LOGS: "true"
+          NEW_RELIC_LAMBDA_HANDLER: "app.lambda_handler"
+          NEW_RELIC_LICENSE_KEY: "<License-key>"
+          NEW_RELIC_LOG_ENDPOINT: "https://staging-log-api.newrelic.com/log/v1"
+          NEW_RELIC_TELEMETRY_ENDPOINT: "https://staging-cloud-collector.newrelic.com/aws/lambda/v1"
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnetA
+          - !Ref PrivateSubnetB
+      Tags: # This format is correct for AWS::Serverless::Function
+        Name: my-test-lambda
 
 Outputs:
   VPCId:
-    Description: ID of the created VPC
-    Value: !Ref CustomTestVPC
-  PublicSubnetOneId:
-    Description: ID of Public Subnet One
-    Value: !Ref PublicSubnetOne
-  PublicSubnetOneAZ:
-    Description: Availability Zone of Public Subnet One
-    Value: !GetAtt PublicSubnetOne.AvailabilityZone
-  PublicSubnetTwoId:
-    Description: ID of Public Subnet Two
-    Value: !Ref PublicSubnetTwo
-  PublicSubnetTwoAZ:
-    Description: Availability Zone of Public Subnet Two
-    Value: !GetAtt PublicSubnetTwo.AvailabilityZone
-  PrivateSubnetOneId:
-    Description: ID of Private Subnet One
-    Value: !Ref PrivateSubnetOne
-  PrivateSubnetTwoId:
-    Description: ID of Private Subnet Two
-    Value: !Ref PrivateSubnetTwo
-  NatGatewayEIPAddress:
-    Description: Public IP address of the NAT Gateway
-    Value: !Ref NatGatewayEIP
+    Description: The ID of the created VPC
+    Value: !Ref MyVPC
+  PublicSubnetIdA:
+    Description: The ID of public subnet A
+    Value: !Ref PublicSubnetA
+  PublicSubnetIdB:
+    Description: The ID of public subnet B
+    Value: !Ref PublicSubnetB
+  PrivateSubnetIdA:
+    Description: The ID of private subnet A
+    Value: !Ref PrivateSubnetA
+  PrivateSubnetIdB:
+    Description: The ID of private subnet B
+    Value: !Ref PrivateSubnetB
+  NATGatewayEIP:
+    Description: The Elastic IP for the single NAT Gateway
+    Value: !Ref EIPForNAT
+  HelloWorldLambdaName:
+    Description: "The name of the Hello World Lambda function"
+    Value: !Ref MyLambdaFunction
+  LambdaSecurityGroupId:
+    Description: "Security Group ID for the Lambda function"
+    Value: !Ref LambdaSecurityGroup
