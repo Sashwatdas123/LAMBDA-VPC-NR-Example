@@ -219,17 +219,14 @@ Resources:
       Timeout: 10
       Role: !GetAtt LambdaExecutionRole.Arn
       Layers:
-        - arn:aws:lambda:us-west-1:451483290750:layer:NewRelicPython313:28
+        - arn:aws:lambda:<aws-region>:<account-id>:layer:NewRelicPython313:<Version>
       Environment:
         Variables:
           NEW_RELIC_ACCOUNT_ID: "<Nr-Account-id>"
-          NEW_RELIC_EXTENSION_LOG_LEVEL: "DEBUG"
           NEW_RELIC_EXTENSION_SEND_EXTENSION_LOGS: "true"
           NEW_RELIC_EXTENSION_SEND_FUNCTION_LOGS: "true"
           NEW_RELIC_LAMBDA_HANDLER: "app.lambda_handler"
           NEW_RELIC_LICENSE_KEY: "<License-key>"
-          NEW_RELIC_LOG_ENDPOINT: "https://staging-log-api.newrelic.com/log/v1"
-          NEW_RELIC_TELEMETRY_ENDPOINT: "https://staging-cloud-collector.newrelic.com/aws/lambda/v1"
       VpcConfig:
         SecurityGroupIds:
           - !Ref LambdaSecurityGroup
